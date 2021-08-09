@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+import os
+import numpy as np
+import rampy as rp
+import cv2
+import time
+import math
+import datetime
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.animation as animation
+from scipy.signal import find_peaks
+from scipy import fftpack
+from scipy import ndimage
+from scipy.signal import detrend
+from scipy.ndimage.filters import gaussian_filter1d
+
+#os.chdir('/home/pi') #work directory on rapsberry pi
+os.chdir('/home/kana/Downloads/filteruse') #work directory on linux
+os.getcwd() # work directory check
+
+isCamera = False # True : use camera, False : file load
+file = 'water1-10.mp4'
+#display matplot box set
+fig = plt.figure()
+
+gs = gridspec.GridSpec(2,2)
+
+ax1 = fig.add_subplot(gs[0,0])
+ax2 = fig.add_subplot(gs[0,1])
+ax3 = fig.add_subplot(gs[1,:])
+
+ax1.set_xticks([])
+ax1.set_yticks([])
+ax2.set_xticks([])
+ax2.set_yticks([])
+#interactive plotting set 
+plt.ion()   
+#plot`s xAxis value
+xCount = 0   
+#camera or file check
+if isCamera != False:
+    cap = cv2.VideoCapture(0)
+else :
+    cap = cv2.VideoCapture(file)
+#frame box size get
+frameWidth = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+frameHeight = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+fps = cap.get(cv2.CAP_PROP_FPS)
+#change integer size at framebox size
+boxWidth = math.floor(frameWidth)
+boxHeight = math.floor(frameHeight)
+#set the spectrum view Frame
+spectrumPixelStart = 800
+spectrumPixelEnd = 1100
+resizeRatio = 10
+#set the spectrum canvas in view frame
+inSpectrumStart = int(spectrumPixelStart / resizeRatio)
+inSpectrumEnd = int(spectrumPixelEnd / resizeRatio)
+#size initiating check of img
+img = []
+videoFrame = []
+frameCapture = []
+slc = []
+target_slice = 0
+ret = True
+#save file name
+date_string = datetime.datetime.now().strftime("%Y-%m-%d %l.%M.%S")
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+out = cv2.VideoWriter(date_string+'.mp4',fourcc, 30.0, (640,480))
+if isCamera != True:
+    print("camera isn`t use")
+    os.remove(date_string+'.mp4') #don`t file saving
+# check the camera or fileread    
+if cap.isOpened() != True:
+    print('didnt file or camera opened')
+    
+while(cap.isOpened()):
+    #capture frame by frame
+    ret, img = cap.read()
+    #image change = simillar to thermal camera display
+    changeImg = cv2.applyColorMap(img,cv2.COLORMAP_HSV)
+    #frame getting check
+    if not ret:
+        print('didnt get the frame. exiting')
+        break
+    if ret:
+        frameCapture.append(img)
+        videoFrame = np.stack(frameCapture, axis=0)
+        videoFrame[videoFrame < 10] = 0
+        img[img < 10] = 0
+        #max, min get
+        target_slice = (spectrumPixelEnd - inSpectrumStart) /2 + inSpectrumStart #get the middle of the fringe blob
+        
+        #retry draw plot time
+        time.sleep(0.1)
+        #plot clear
+        ax1.clear()    
+        ax1.imshow(img)
+        ax1.set_title(file + " IR original")
+        
+        #plot clear
+        ax2.clear()
+        ax2.imshow(changeImg)
+        ax2.set_title(file + " derivative")
+        ax2.plot([target_slice, target_slice], [changeImg.shape[0],0], 'r-')
+        
+        slc = changeImg[:, int(target_slice)]
+        
+        #check Fourier Transform
+        fourier = fftpack.fft2(changeImg)
+        setAbs = abs(fourier)
+        #get the centered spectrum
+        Fsh = fftpack.fftshift(fourier)
+        #apply log transform
+        setAbs2 = math.log(len(abs(Fsh))-1)
+        
+        print(int(target_slice))
+        slc[slc < 10] = 0
+        #slc = gaussian_filter1d(slc, sigma=40)cl
+        #slc = ndimage.gaussian_gradient_magnitude(slc, sigma=20)
+        slc = ndimage.gaussian_filter(slc, sigma=30)
+        #slc = ndimage.gaussian_laplace(slc, sigma=15)
+        #slc = ndimage.fourier_gaussian(slc, sigma=25)
+        
+        ax3.clear()
+        #print(slc.shape[0])
+        #print(slc.shape[1])
+        #print(slc[:,1].data.obj[1079])
+        
+        #check slc`s object data 
+        for idx in range(len(slc)):
+            yValue = slc[:,1].data.obj[idx]
+            #to judge Yvalue ==> Yvalue is point on the plot that check the load status
+            if idx >=600 & idx <=1079:
+                if yValue < 105:
+                    print("ice load status found")
+                elif yValue > 150:
+                    print("didnt check ice")
+            if idx >=500 & idx <=699:
+                if yValue < 105:
+                    print("water load status found")  
+                elif yValue > 150:
+                    print("didnt check water")
+            if idx >=300 & idx <=600:
+                if yValue >= 130 & yValue <= 145:
+                    print("dry load found")
+                elif yValue < 130:
+                    print("didnt check dry")
+            else:
+                print("i didnt know load status")
+        ax3.plot(slc)
+        #ax3.plot(slc[:,0], slc[:,1], 'k.', markersize=1)
+        #ax3.plot(abs(fftpack.fft2(slc)))
+        
+    #frame read
+    #cv2.imshow('videoCheck', changeImg)           
+    plt.show()
+    plt.pause(0.1)
+    
+    if isCamera != False:
+        out.write(img)
+    #print('width:' + repr(frameWidth) + ', height:' + repr(frameHeight) +', fps:' + repr(fps))
+    #time.sleep(10) #change 10 to x to save video file after 'x' sec
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+#when everything done, release the capture    
+cap.release()
+out.release()
+cv2.destroyAllWindows()
